@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # (optional) Start time capture for work-log
+     
       - name: Mark start time
         id: t0
         run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
