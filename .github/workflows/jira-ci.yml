@@ -1,0 +1,87 @@
+name: CI → Jira
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # (optional) Start time capture for work-log
+      - name: Mark start time
+        id: t0
+        run: echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      # Your build/tests
+      - name: Run tests (demo)
+        run: echo "tests passed"
+
+      # Extract first Jira key from branch / PR title / last commit
+      - name: Extract Jira key
+        id: jirakey
+        shell: bash
+        run: |
+          TEXT="${GITHUB_REF_NAME} ${GITHUB_HEAD_REF} ${GITHUB_BASE_REF}"
+          TEXT="$TEXT $(git log -1 --pretty=%B || true)"
+          KEY="$(echo "$TEXT" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 || true)"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "Detected key: $KEY"
+
+      # Quick sanity for secrets
+      - name: Check Jira secrets
+        run: |
+          [ -n "${{ secrets.JIRA_SITE }}" ] || (echo "❌ JIRA_SITE missing" && exit 1)
+          [ -n "${{ secrets.JIRA_EMAIL }}" ] || (echo "❌ JIRA_EMAIL missing" && exit 1)
+          [ -n "${{ secrets.JIRA_API_TOKEN }}" ] || (echo "❌ JIRA_API_TOKEN missing" && exit 1)
+
+      # ✅ SUCCESS → comment on Jira issue
+      - name: Post success comment to Jira
+        if: success() && steps.jirakey.outputs.key != ''
+        env:
+          JIRA_SITE: ${{ secrets.JIRA_SITE }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          ISSUE="${{ steps.jirakey.outputs.key }}"
+          MSG="✅ CI passed for ${GITHUB_REPOSITORY}@${GITHUB_SHA::7} (workflow: ${GITHUB_WORKFLOW})"
+          curl -sS -f -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"body\":\"$MSG\"}" \
+            "$JIRA_SITE/rest/api/3/issue/$ISSUE/comment"
+
+      # (optional) SUCCESS → log CI duration as work-log
+      - name: Log CI duration to Jira worklog
+        if: success() && steps.jirakey.outputs.key != ''
+        env:
+          JIRA_SITE: ${{ secrets.JIRA_SITE }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          ISSUE="${{ steps.jirakey.outputs.key }}"
+          END=$(date +%s); START="${{ steps.t0.outputs.start }}"
+          SECS=$((END-START)); MINS=$(( (SECS+59)/60 ))
+          BODY='{"timeSpent":"'"$MINS"'m","comment":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"CI build time"}]}]}}'
+          curl -sS -f -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "$BODY" \
+            "$JIRA_SITE/rest/api/3/issue/$ISSUE/worklog"
+
+      # ❌ FAILURE → comment on Jira issue
+      - name: Post failure comment to Jira
+        if: failure() && steps.jirakey.outputs.key != ''
+        env:
+          JIRA_SITE: ${{ secrets.JIRA_SITE }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: |
+          ISSUE="${{ steps.jirakey.outputs.key }}"
+          MSG="❌ CI failed for ${GITHUB_REPOSITORY}@${GITHUB_SHA::7}. Check Actions logs."
+          curl -sS -f -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"body\":\"$MSG\"}" \
+            "$JIRA_SITE/rest/api/3/issue/$ISSUE/comment"
