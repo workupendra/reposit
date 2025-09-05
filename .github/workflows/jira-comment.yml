@@ -1,0 +1,37 @@
+name: CI with Jira comment
+on:
+  push:
+    branches: [ "**" ]   # har branch par chalega
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Demo build/test
+      - name: Run tests (demo)
+        run: echo "tests passed"
+
+      # Branch/commit se pehla Jira key nikaalo (e.g., PROJ-123)
+      - name: Extract Jira key from branch/commit
+        id: jirakey
+        run: |
+          REF="${GITHUB_REF_NAME}"
+          MSG="$(git log -1 --pretty=%B)"
+          KEY="$(echo "$REF $MSG" | grep -oE '[A-Z]+-[0-9]+' | head -1 || true)"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      # Jira issue par comment post karo (agar key mila)
+      - name: Post comment to Jira
+        if: steps.jirakey.outputs.key != ''
+        run: |
+          BODY=$(jq -cn --arg txt "✅ CI passed for ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}" '{body:$txt}')
+          curl -s -X POST \
+            -H "Authorization: Basic '$(printf "%s:%s" "$JIRA_EMAIL" "$JIRA_API_TOKEN" | base64)'" \
+            -H "Content-Type: application/json" \
+            --data "$BODY" \
+            "${{ secrets.JIRA_SITE }}/rest/api/3/issue/${{ steps.jirakey.outputs.key }}/comment"
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
